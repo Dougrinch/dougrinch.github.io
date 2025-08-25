@@ -1,90 +1,103 @@
-<html>
-  <body>
-    <script>
-function createAttentionTracker(onChange) {
-  const state = {
-    visible: document.visibilityState === 'visible',
-    focused: document.hasFocus(),
-    frozen: false,
-    inBFCache: false,
-    screenLocked: false,   // Chromium IdleDetector (optional)
-    userIdle: false,       // Chromium IdleDetector (optional)
-    supported: {
-      idleDetector: 'IdleDetector' in window,
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Visibility Timer</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --fg: #e6e8eb;
+      --muted: #8a8f98;
     }
-  };
-
-  const compute = () => {
-    // “Attentive” = we’re visible, focused, not frozen/in bfcache, and (if available) screen is unlocked & user not idle
-    const attentive =
-      state.visible &&
-      state.focused &&
-      !state.frozen &&
-      !state.inBFCache &&
-      (!state.supported.idleDetector || (!state.screenLocked && !state.userIdle));
-
-    onChange?.(attentive, { ...state });
-    return attentive;
-  };
-
-  // Visibility (covers background tab & minimized)
-  document.addEventListener('visibilitychange', () => {
-    state.visible = (document.visibilityState === 'visible');
-    compute();
-  });
-
-  // Focus (input focus on your window)
-  window.addEventListener('focus', () => { state.focused = true; compute(); });
-  window.addEventListener('blur',  () => { state.focused = document.hasFocus(); compute(); });
-
-  // Page Lifecycle
-  window.addEventListener('freeze', () => { state.frozen = true; compute(); });
-  window.addEventListener('resume', () => { state.frozen = false; compute(); });
-  window.addEventListener('pagehide', (e) => { state.inBFCache = !!e.persisted; compute(); });
-  window.addEventListener('pageshow', () => { state.inBFCache = false; compute(); });
-
-  // Initial notify
-  compute();
-
-  // Optional: enable Chromium Idle Detection (detects screen lock / deep idle)
-  async function enableIdleDetection({ thresholdMs = 60000 } = {}) {
-    if (!state.supported.idleDetector) return false;
-    try {
-      const permission = await IdleDetector.requestPermission?.();
-      if (permission && permission !== 'granted') return false;
-
-      const ac = new AbortController();
-      const detector = new IdleDetector();
-      await detector.start({ threshold: thresholdMs, signal: ac.signal });
-
-      detector.addEventListener('change', () => {
-        state.screenLocked = (detector.screenState === 'locked');
-        state.userIdle    = (detector.userState === 'idle');
-        compute();
-      });
-
-      // Return a small controller so you can stop it if needed
-      return { stop: () => ac.abort(), detector };
-    } catch {
-      return false;
+    html, body { height: 100%; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: radial-gradient(1200px 600px at 50% 40%, #171a20 0%, var(--bg) 60%);
+      color: var(--fg);
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
     }
-  }
+    .wrap {
+      display: grid;
+      place-items: center;
+      text-align: center;
+      padding: 8vmin 4vmin;
+      width: 100%;
+      height: 100%;
+    }
+    .counter {
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      line-height: 1.1;
+      font-size: clamp(28px, 10vw, 140px);
+      text-wrap: balance;
+      text-shadow: 0 1px 0 rgba(255,255,255,0.03), 0 8px 40px rgba(0,0,0,0.45);
+    }
+    .hint {
+      margin-top: 1rem;
+      font-size: clamp(12px, 2.5vw, 18px);
+      color: var(--muted);
+      user-select: none;
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <div id="counter" class="counter" role="status" aria-live="polite">became visible 0 seconds ago</div>
+    <div class="hint">Switch tabs/windows and come back — it resets on visibility.</div>
+  </main>
 
-  return {
-    isAttentive: () => compute(),
-    state,
-    enableIdleDetection
-  };
-}
+  <script>
+    (() => {
+      const el = document.getElementById('counter');
+      let visibleSince = performance.now();
+      let rafId = 0;
+      let lastSec = -1;
 
-// Example usage:
-const tracker = createAttentionTracker((attentive, state) => {
-  // Do something when attention changes
-  console.log('Attentive?', attentive, state);
-});
+      function setText(sec) {
+        const unit = sec === 1 ? 'second' : 'seconds';
+        el.textContent = `became visible ${sec} ${unit} ago`;
+      }
 
-// Optional (Chromium): detect screen lock / lid close
-tracker.enableIdleDetection({ thresholdMs: 30_000 });
-</script>
-  </body>
+      function tick() {
+        const sec = Math.floor((performance.now() - visibleSince) / 1000);
+        if (sec !== lastSec) {
+          lastSec = sec;
+          setText(sec);
+        }
+        rafId = requestAnimationFrame(tick);
+      }
+
+      function start() {
+        visibleSince = performance.now();
+        lastSec = -1;
+        if (!rafId) tick();
+      }
+
+      function stop() {
+        if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+      }
+
+      function handleVisibility() {
+        if (document.visibilityState === 'visible') {
+          start();
+        } else {
+          stop();
+        }
+      }
+
+      // Visibility lifecycle
+      document.addEventListener('visibilitychange', handleVisibility, { passive: true });
+      window.addEventListener('pageshow', handleVisibility, { passive: true });
+      window.addEventListener('pagehide', stop, { passive: true });
+
+      // Initial
+      handleVisibility();
+    })();
+  </script>
+</body>
 </html>
