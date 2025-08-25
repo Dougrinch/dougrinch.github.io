@@ -1,0 +1,90 @@
+<html>
+  <body>
+    <script>
+function createAttentionTracker(onChange) {
+  const state = {
+    visible: document.visibilityState === 'visible',
+    focused: document.hasFocus(),
+    frozen: false,
+    inBFCache: false,
+    screenLocked: false,   // Chromium IdleDetector (optional)
+    userIdle: false,       // Chromium IdleDetector (optional)
+    supported: {
+      idleDetector: 'IdleDetector' in window,
+    }
+  };
+
+  const compute = () => {
+    // “Attentive” = we’re visible, focused, not frozen/in bfcache, and (if available) screen is unlocked & user not idle
+    const attentive =
+      state.visible &&
+      state.focused &&
+      !state.frozen &&
+      !state.inBFCache &&
+      (!state.supported.idleDetector || (!state.screenLocked && !state.userIdle));
+
+    onChange?.(attentive, { ...state });
+    return attentive;
+  };
+
+  // Visibility (covers background tab & minimized)
+  document.addEventListener('visibilitychange', () => {
+    state.visible = (document.visibilityState === 'visible');
+    compute();
+  });
+
+  // Focus (input focus on your window)
+  window.addEventListener('focus', () => { state.focused = true; compute(); });
+  window.addEventListener('blur',  () => { state.focused = document.hasFocus(); compute(); });
+
+  // Page Lifecycle
+  window.addEventListener('freeze', () => { state.frozen = true; compute(); });
+  window.addEventListener('resume', () => { state.frozen = false; compute(); });
+  window.addEventListener('pagehide', (e) => { state.inBFCache = !!e.persisted; compute(); });
+  window.addEventListener('pageshow', () => { state.inBFCache = false; compute(); });
+
+  // Initial notify
+  compute();
+
+  // Optional: enable Chromium Idle Detection (detects screen lock / deep idle)
+  async function enableIdleDetection({ thresholdMs = 60000 } = {}) {
+    if (!state.supported.idleDetector) return false;
+    try {
+      const permission = await IdleDetector.requestPermission?.();
+      if (permission && permission !== 'granted') return false;
+
+      const ac = new AbortController();
+      const detector = new IdleDetector();
+      await detector.start({ threshold: thresholdMs, signal: ac.signal });
+
+      detector.addEventListener('change', () => {
+        state.screenLocked = (detector.screenState === 'locked');
+        state.userIdle    = (detector.userState === 'idle');
+        compute();
+      });
+
+      // Return a small controller so you can stop it if needed
+      return { stop: () => ac.abort(), detector };
+    } catch {
+      return false;
+    }
+  }
+
+  return {
+    isAttentive: () => compute(),
+    state,
+    enableIdleDetection
+  };
+}
+
+// Example usage:
+const tracker = createAttentionTracker((attentive, state) => {
+  // Do something when attention changes
+  console.log('Attentive?', attentive, state);
+});
+
+// Optional (Chromium): detect screen lock / lid close
+tracker.enableIdleDetection({ thresholdMs: 30_000 });
+</script>
+  </body>
+</html>
